@@ -51,8 +51,8 @@ The application uses image-processing rules rather than a trained machine-learni
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/AIProd/caliberatedmigration.git
-cd caliberatedmigration
+git clone https://github.com/AIProd/invitrogap.git
+cd invitrogap
 ```
 
 ### 2. Create and activate a virtual environment
@@ -220,7 +220,7 @@ For scientific evaluation, distinguish between **(a) initial wound-mask agreemen
 ## Repository structure
 
 ```text
-caliberatedmigration/
+invitrogap/
 ├── app.py            # Image-processing pipeline and Streamlit interface
 ├── index.html        # Experimental stlite browser entry point
 ├── requirements.txt  # Python dependencies
