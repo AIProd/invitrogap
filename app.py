@@ -408,7 +408,7 @@ with st.form("analysis_form"):
             "Min cell object size (px)",
             min_value=0,
             max_value=500,
-            value=80,
+            value=100,
             step=10,
             help="Objects smaller than this (in wound/band) are treated as debris and ignored. "
                  "Increase to remove small specks; decrease if real cells are being removed.",
