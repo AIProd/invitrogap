@@ -360,7 +360,7 @@ with st.form("analysis_form"):
             "Wound smoothness percentile",
             min_value=5,
             max_value=60,
-            value=30,
+            value=50,
             step=1,
             help="Lower = narrower wound mask; higher = wider wound mask. "
                  "Pixels with Sobel gradient below this percentile are considered wound.",
@@ -371,7 +371,7 @@ with st.form("analysis_form"):
             "Wound edge smoothing (px)",
             min_value=1,
             max_value=30,
-            value=10,
+            value=5,
             step=1,
             help="Radius for morphological open/close. Larger = smoother wound band.",
         )
