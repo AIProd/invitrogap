@@ -339,11 +339,11 @@ with st.form("analysis_form"):
         accept_multiple_files=True,
     )
 
-    st.markdown("### Analysis settings (optional)")
-    st.caption(
-        "Tweak only if the wound mask or cell detection looks off. "
-        "Defaults are tuned to approximate Incucyte for your RCC example."
-    )
+    st.markdown("### Analysis settings")
+    # st.caption(
+    #     "Tweak only if the wound mask or cell detection looks off. "
+    #     "Defaults are tuned to approximate Incucyte for your RCC example."
+    # )
 
     col1, col2, col3, col4 = st.columns(4)
 
