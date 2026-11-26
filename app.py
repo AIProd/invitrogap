@@ -573,8 +573,7 @@ if result is not None:
     df_metrics = result["metrics"]
     overlays = result["overlays"]
 
-    st.success(f"Analysis complete — {result['image_count']} image(s) processed. "
-               "Results will stay visible after downloading Excel.")
+    st.success(f"Analysis complete — {result['image_count']} image(s) processed. ")
 
     st.header("Metrics")
     styled = df_metrics.style.format({
