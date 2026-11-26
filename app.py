@@ -6,7 +6,7 @@ from PIL import Image, ImageOps
 
 import streamlit as st
 import matplotlib.pyplot as plt
-
+from io import BytesIO
 from skimage.filters import gaussian, sobel
 from skimage import morphology, measure
 
@@ -314,9 +314,33 @@ def plot_metric(
     return fig
 
 
-def df_to_csv_bytes(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8")
+def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
+    output = BytesIO()
 
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(
+            writer,
+            sheet_name="Wound Metrics",
+            index=False
+        )
+
+        ws = writer.sheets["Wound Metrics"]
+
+        # Improve readability
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
+        ws.column_dimensions["A"].width = 35
+        ws.column_dimensions["B"].width = 15
+        ws.column_dimensions["C"].width = 27
+        ws.column_dimensions["D"].width = 34
+
+        # Format numeric columns
+        for row in ws.iter_rows(min_row=2):
+            for cell in row[1:]:
+                cell.number_format = "0.00"
+
+    return output.getvalue()
 
 # =====================================================
 # Streamlit UI
@@ -468,12 +492,21 @@ if submitted:
             })
             st.dataframe(styled, use_container_width=True)
 
-            csv_data = df_to_csv_bytes(df_metrics)
+            # csv_data = df_to_csv_bytes(df_metrics)
+            # st.download_button(
+            #     label="Download CSV",
+            #     data=csv_data,
+            #     file_name="wound_metrics.csv",
+            #     mime="text/csv",
+            # )
+
+            excel_data = df_to_excel_bytes(df_metrics)
+
             st.download_button(
-                label="Download CSV",
-                data=csv_data,
-                file_name="wound_metrics.csv",
-                mime="text/csv",
+                label="Download Excel",
+                data=excel_data,
+                file_name="InVitroGap_Wound_Metrics.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
             st.header("Time-Series Plots")
