@@ -1,12 +1,14 @@
 import re
+from io import BytesIO
 from typing import List, Tuple, Dict
+
 import numpy as np
 import pandas as pd
 from PIL import Image, ImageOps
 
 import streamlit as st
 import matplotlib.pyplot as plt
-from io import BytesIO
+
 from skimage.filters import gaussian, sobel
 from skimage import morphology, measure
 
@@ -314,33 +316,39 @@ def plot_metric(
     return fig
 
 
-def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
+def df_to_excel_bytes(df: pd.DataFrame, analysis_settings: Dict[str, float]) -> bytes:
+    """Export measurements plus the parameters used to generate them."""
     output = BytesIO()
+    settings_df = pd.DataFrame(
+        [(key, value) for key, value in analysis_settings.items()],
+        columns=["Parameter", "Value"],
+    )
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(
-            writer,
-            sheet_name="Wound Metrics",
-            index=False
-        )
+        df.to_excel(writer, sheet_name="Wound Metrics", index=False)
+        settings_df.to_excel(writer, sheet_name="Analysis Settings", index=False)
 
+        # Easy-to-read metrics worksheet
         ws = writer.sheets["Wound Metrics"]
-
-        # Improve readability
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
-
         ws.column_dimensions["A"].width = 35
         ws.column_dimensions["B"].width = 15
         ws.column_dimensions["C"].width = 27
         ws.column_dimensions["D"].width = 34
-
-        # Format numeric columns
         for row in ws.iter_rows(min_row=2):
             for cell in row[1:]:
                 cell.number_format = "0.00"
 
+        # A second worksheet records the exact settings selected in the UI.
+        settings_ws = writer.sheets["Analysis Settings"]
+        settings_ws.freeze_panes = "A2"
+        settings_ws.auto_filter.ref = settings_ws.dimensions
+        settings_ws.column_dimensions["A"].width = 35
+        settings_ws.column_dimensions["B"].width = 20
+
     return output.getvalue()
+
 
 # =====================================================
 # Streamlit UI
@@ -492,16 +500,16 @@ if submitted:
             })
             st.dataframe(styled, use_container_width=True)
 
-            # csv_data = df_to_csv_bytes(df_metrics)
-            # st.download_button(
-            #     label="Download CSV",
-            #     data=csv_data,
-            #     file_name="wound_metrics.csv",
-            #     mime="text/csv",
-            # )
-
-            excel_data = df_to_excel_bytes(df_metrics)
-
+            analysis_settings = {
+                "Gaussian blur sigma": gaussian_sigma,
+                "Wound smoothness percentile": wound_low_grad_percentile,
+                "Wound edge smoothing (px)": morph_kernel_radius,
+                "Minimum wound size (px squared)": min_wound_size,
+                "Reference band thickness (px)": band_thickness_px,
+                "Cell texture percentile": cell_percentile,
+                "Minimum cell object size (px squared)": min_cell_size,
+            }
+            excel_data = df_to_excel_bytes(df_metrics, analysis_settings)
             st.download_button(
                 label="Download Excel",
                 data=excel_data,
