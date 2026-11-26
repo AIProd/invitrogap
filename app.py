@@ -1,6 +1,7 @@
 import re
+import time
 from io import BytesIO
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -220,10 +221,18 @@ def run_full_analysis(
     band_thickness_px: int,
     cell_percentile: float,
     min_cell_size: int,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> Tuple[pd.DataFrame, List[Image.Image]]:
+    """Full analysis for one well / condition.
+
+    progress_callback reports actual processing stages to the interface and
+    does not affect wound segmentation or the calculated metrics.
     """
-    Full analysis for one well / condition.
-    """
+    def report(percent: int, message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(percent, message)
+
+    report(18, "Sorting images by time point...")
     # sort by time from filename
     hours_list = [parse_hours_from_name(n) for n in names]
     order = np.argsort(hours_list)
@@ -232,8 +241,14 @@ def run_full_analysis(
     names_sorted = [names[i] for i in order]
     hours_sorted = [hours_list[i] for i in order]
 
-    gray_series = [to_gray(im, gaussian_sigma) for im in images_sorted]
+    gray_series = []
+    total = len(images_sorted)
+    for i, im in enumerate(images_sorted, start=1):
+        report(18 + round(22 * (i - 1) / total),
+               f"Preprocessing image {i}/{total}...")
+        gray_series.append(to_gray(im, gaussian_sigma))
 
+    report(40, "Identifying the initial wound region...")
     # wound from first timepoint
     wound_mask, _grad0 = build_wound_mask_from_t0(
         gray_series[0],
@@ -242,9 +257,11 @@ def run_full_analysis(
         min_wound_size,
     )
 
+    report(47, "Creating the reference band...")
     # reference band outside the wound
     band_mask = make_band_mask(wound_mask, band_thickness_px)
 
+    report(50, "Calculating baseline cell coverage...")
     # baseline wound cell fraction w0
     grad_first = sobel(gray_series[0])
     thr_cell_first = _cell_threshold(grad_first, band_mask, cell_percentile)
@@ -260,9 +277,11 @@ def run_full_analysis(
     rows = []
     overlays = []
 
-    for img_pil, gray_img, hr, nm in zip(
+    for i, (img_pil, gray_img, hr, nm) in enumerate(zip(
         images_sorted, gray_series, hours_sorted, names_sorted
-    ):
+    ), start=1):
+        report(54 + round(36 * (i - 1) / total),
+               f"Measuring wound closure {i}/{total}: {nm}")
         metrics = analyze_timepoint(
             gray_img,
             wound_mask,
@@ -284,6 +303,7 @@ def run_full_analysis(
         ov = overlay_debug_rgb(img_pil, wound_mask, wound_cells_now)
         overlays.append(ov)
 
+    report(92, "Finalizing the measurement table and overlays...")
     df_metrics = pd.DataFrame(rows).sort_values("Hours").reset_index(drop=True)
     return df_metrics, overlays
 
@@ -355,6 +375,11 @@ def df_to_excel_bytes(df: pd.DataFrame, analysis_settings: Dict[str, float]) -> 
 # =====================================================
 
 st.set_page_config(page_title="Wound Healing Analysis", layout="wide")
+
+# Results must live outside the submit-button branch. Streamlit reruns the
+# script after a download, but st.session_state survives that rerun.
+if "analysis_result" not in st.session_state:
+    st.session_state["analysis_result"] = None
 
 st.title("Wound Healing Analysis")
 
@@ -470,90 +495,137 @@ with st.form("analysis_form"):
     submitted = st.form_submit_button("Analyze")
 
 if submitted:
+    # Clear old results ONLY when a new analysis is explicitly requested.
+    # Downloading Excel or interacting with display controls will not clear it.
+    st.session_state["analysis_result"] = None
+
     if not uploaded_files:
         st.warning("Please upload at least one image series.")
     else:
-        imgs = [Image.open(f).convert("RGB") for f in uploaded_files]
-        names = [f.name for f in uploaded_files]
+        status_placeholder = st.empty()
+        progress_placeholder = st.empty()
+        progress_bar = progress_placeholder.progress(0)
+
+        def update_progress(percent: int, message: str) -> None:
+            progress_bar.progress(max(0, min(100, int(percent))))
+            status_placeholder.info(message)
 
         try:
-            df_metrics, overlays = run_full_analysis(
-                images=imgs,
-                names=names,
-                gaussian_sigma=gaussian_sigma,
-                wound_low_grad_percentile=wound_low_grad_percentile,
-                morph_kernel_radius=morph_kernel_radius,
-                min_wound_size=min_wound_size,
-                band_thickness_px=band_thickness_px,
-                cell_percentile=cell_percentile,
-                min_cell_size=min_cell_size,
-            )
-        except Exception as e:
-            st.error(f"Analysis failed: {e}")
-        else:
-            st.header("Metrics")
+            update_progress(0, "Starting analysis...")
+            # A very short pause lets the initial progress indicator appear
+            # in both regular Streamlit and the browser-hosted stlite app.
+            with st.spinner("Analyzing microscopy images..."):
+                time.sleep(0.1)
+                imgs = []
+                names = []
+                count = len(uploaded_files)
+                for i, f in enumerate(uploaded_files, start=1):
+                    update_progress(1 + round(15 * (i - 1) / count),
+                                    f"Loading image {i}/{count}: {f.name}")
+                    imgs.append(Image.open(f).convert("RGB"))
+                    names.append(f.name)
 
-            styled = df_metrics.style.format({
-                "Hours": "{:.2f}",
-                "Wound Confluence (%)": "{:.2f}",
-                "Relative Wound Density (%)": "{:.2f}",
-            })
-            st.dataframe(styled, use_container_width=True)
-
-            analysis_settings = {
-                "Gaussian blur sigma": gaussian_sigma,
-                "Wound smoothness percentile": wound_low_grad_percentile,
-                "Wound edge smoothing (px)": morph_kernel_radius,
-                "Minimum wound size (px squared)": min_wound_size,
-                "Reference band thickness (px)": band_thickness_px,
-                "Cell texture percentile": cell_percentile,
-                "Minimum cell object size (px squared)": min_cell_size,
-            }
-            excel_data = df_to_excel_bytes(df_metrics, analysis_settings)
-            st.download_button(
-                label="Download Excel",
-                data=excel_data,
-                file_name="InVitroGap_Wound_Metrics.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-
-            st.header("Time-Series Plots")
-
-            hours_arr = df_metrics["Hours"].to_numpy(dtype=float)
-
-            conf_arr = df_metrics["Wound Confluence (%)"].to_numpy(dtype=float)
-            rwd_arr = df_metrics["Relative Wound Density (%)"].to_numpy(dtype=float)
-
-            pcol1, pcol2 = st.columns(2)
-            with pcol1:
-                fig_conf = plot_metric(
-                    hours_arr,
-                    conf_arr,
-                    ylabel="Wound Confluence (%)",
-                    title="Wound Confluence vs Time",
-                    scale=plot_scale,
+                df_metrics, overlays = run_full_analysis(
+                    images=imgs,
+                    names=names,
+                    gaussian_sigma=gaussian_sigma,
+                    wound_low_grad_percentile=wound_low_grad_percentile,
+                    morph_kernel_radius=morph_kernel_radius,
+                    min_wound_size=min_wound_size,
+                    band_thickness_px=band_thickness_px,
+                    cell_percentile=cell_percentile,
+                    min_cell_size=min_cell_size,
+                    progress_callback=update_progress,
                 )
-                st.pyplot(fig_conf, clear_figure=True)
 
-            with pcol2:
-                fig_rwd = plot_metric(
-                    hours_arr,
-                    rwd_arr,
-                    ylabel="Relative Wound Density (%)",
-                    title="Relative Wound Density vs Time",
-                    scale=plot_scale,
-                )
-                st.pyplot(fig_rwd, clear_figure=True)
+                update_progress(95, "Preparing the Excel workbook...")
+                analysis_settings = {
+                    "Gaussian blur sigma": gaussian_sigma,
+                    "Wound smoothness percentile": wound_low_grad_percentile,
+                    "Wound edge smoothing (px)": morph_kernel_radius,
+                    "Minimum wound size (px squared)": min_wound_size,
+                    "Reference band thickness (px)": band_thickness_px,
+                    "Cell texture percentile": cell_percentile,
+                    "Minimum cell object size (px squared)": min_cell_size,
+                }
+                excel_data = df_to_excel_bytes(df_metrics, analysis_settings)
 
-            st.header("Overlay QC")
-            st.caption(
-                "Blue: wound region defined at first timepoint.  "
-                "Green: detected cells inside that wound region at each timepoint (closure)."
-            )
+                # Only persist a complete and successfully exported analysis.
+                st.session_state["analysis_result"] = {
+                    "metrics": df_metrics,
+                    "overlays": overlays,
+                    "excel_data": excel_data,
+                    "image_count": len(imgs),
+                }
+                update_progress(100, "Analysis complete.")
 
-            cols = st.columns(overlay_cols)
-            for i, (row, overlay_img) in enumerate(zip(df_metrics.itertuples(index=False), overlays)):
-                col = cols[i % overlay_cols]
-                with col:
-                    st.caption(f"{row.Image}  ({row.Hours:.2f} h)")
-                    st.image(overlay_img, use_container_width=True)
+        except Exception as exc:
+            st.session_state["analysis_result"] = None
+            st.error(f"Analysis failed: {exc}")
+        finally:
+            status_placeholder.empty()
+            progress_placeholder.empty()
+
+# IMPORTANT: Render saved results independently of `submitted`.
+# A download click may rerun the page with submitted=False.
+result = st.session_state["analysis_result"]
+if result is not None:
+    df_metrics = result["metrics"]
+    overlays = result["overlays"]
+
+    st.success(f"Analysis complete — {result['image_count']} image(s) processed. "
+               "Results will stay visible after downloading Excel.")
+
+    st.header("Metrics")
+    styled = df_metrics.style.format({
+        "Hours": "{:.2f}",
+        "Wound Confluence (%)": "{:.2f}",
+        "Relative Wound Density (%)": "{:.2f}",
+    })
+    st.dataframe(styled, use_container_width=True)
+
+    st.download_button(
+        label="Download Excel",
+        data=result["excel_data"],
+        file_name="InVitroGap_Wound_Metrics.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="invitrogap_excel_download",
+    )
+    st.caption("The Excel file includes Wound Metrics and Analysis Settings. "
+               "Click Analyze again to generate new measurements after changing inputs.")
+
+    st.header("Time-Series Plots")
+    hours_arr = df_metrics["Hours"].to_numpy(dtype=float)
+    conf_arr = df_metrics["Wound Confluence (%)"].to_numpy(dtype=float)
+    rwd_arr = df_metrics["Relative Wound Density (%)"].to_numpy(dtype=float)
+
+    pcol1, pcol2 = st.columns(2)
+    with pcol1:
+        fig_conf = plot_metric(
+            hours_arr, conf_arr,
+            ylabel="Wound Confluence (%)",
+            title="Wound Confluence vs Time",
+            scale=plot_scale,
+        )
+        st.pyplot(fig_conf, clear_figure=True)
+
+    with pcol2:
+        fig_rwd = plot_metric(
+            hours_arr, rwd_arr,
+            ylabel="Relative Wound Density (%)",
+            title="Relative Wound Density vs Time",
+            scale=plot_scale,
+        )
+        st.pyplot(fig_rwd, clear_figure=True)
+
+    st.header("Overlay QC")
+    st.caption("Blue: wound region defined at first timepoint. "
+               "Green: detected cells inside that wound region at each timepoint (closure).")
+
+    cols = st.columns(overlay_cols)
+    for i, (row, overlay_img) in enumerate(zip(
+        df_metrics.itertuples(index=False), overlays
+    )):
+        with cols[i % overlay_cols]:
+            st.caption(f"{row.Image}  ({row.Hours:.2f} h)")
+            st.image(overlay_img, use_container_width=True)
